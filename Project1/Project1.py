@@ -8,9 +8,9 @@ from dune.grid import structuredGrid, cartesianDomain
 rect_gridView = structuredGrid([-0.5, -0.5], [2, 1], [10, 20])
 #rect_gridView.plot()
 
-from dune.alugrid import aluConformGrid
+from dune.alugrid import aluConformGrid as leafGridView
 domain = cartesianDomain([-0.5, -0.5], [2, 1], [10, 20])
-tri_gridView = aluConformGrid(domain)
+tri_gridView = leafGridView(domain)
 #tri_gridView.plot()
 
 
@@ -28,10 +28,29 @@ with pygmsh.occ.Geometry() as geom:
     domain = geom.boolean_difference(grid, hole)
     mesh = geom.generate_mesh()
 
+points, cells = mesh.points[:,:2], mesh.cells_dict
+
+dune_domain = {
+    "vertices": points.astype("float"),
+    "simplices": cells["triangle"]
+}
+
+gridView2D = leafGridView(dune_domain)
+
+
+
+
 import meshio
 
 #meshio.write("mesh.vtk", mesh)
 
+##########
+
+
+#Har du ett bättre sätt att plotta?
+
+
+##########
 '''
 # --- Extract triangle connectivity ---
 points = mesh.points[:, :2]          # x,y only
@@ -66,4 +85,18 @@ for k in range(len(grid_triangles)):
 
 print(h_max)
 
+
+from dune.fem.utility import gridWidth
+h_dune = gridWidth(gridView2D)
+print(h_dune)
+
+
+
+################
+#Dessa stämmer ej överens?
+################
+
+
+
+#Task 10-11
 
