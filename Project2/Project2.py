@@ -1,6 +1,6 @@
-import numpy as np # type: ignore
-import scipy.sparse   # type: ignore
-import dune.geometry #type: ignore
+import numpy as np 
+import scipy.sparse   
+import dune.geometry 
 #Task 3
 class LinearLagrangeSpace:
     def __init__(self,view):
@@ -10,9 +10,27 @@ class LinearLagrangeSpace:
         self.points = np.array( [ [0,0],[1,0],[0,1] ] )
     def evaluateLocal(self, x):
         return np.array( [1-x[0]-x[1], x[0], x[1]] ) #Using barycentric coordinates
+    
     def gradientLocal(self, x):
         dbary = [[-1,-1], [1,0], [0,1]]
         return np.array( dbary )
+
+    def interpolation(self, f):
+        dofs = np.zeros(len(self.mapper))
+        dim = self.view.dimension  
+
+        visited = np.zeros(len(self.mapper), dtype=bool)
+
+        for E in self.view.elements:
+            geo = E.geometry
+            for l in range(self.localDofs):  # 0,1,2 corners
+                i = self.mapper.subIndex(E, l, dim)   # global vertex dof index
+                if not visited[i]:
+                    x = geo.corner(l)                 # global coordinate of that vertex
+                    dofs[i] = f(x)
+                    visited[i] = True
+
+        return dofs    
 
 #Task 4
 def assemble(space,force):
@@ -82,15 +100,15 @@ def assemble(space,force):
     shape=(len(space.mapper),len(space.mapper))).tocsr()
     return rhs,matrix
 
-from dune.grid import cartesianDomain # type: ignore
-from dune.alugrid import aluConformGrid # type: ignore
+from dune.grid import cartesianDomain 
+from dune.alugrid import aluConformGrid 
 
 # First construct the grid
 domain = cartesianDomain([0, 0], [1, 1], [10, 10])
 view = aluConformGrid(domain)
 
-from dune.fem.function import gridFunction # type: ignore
-from dune.fem import integrate # type: ignore
+from dune.fem.function import gridFunction 
+from dune.fem import integrate 
 # Grid function to project
 @gridFunction(view, name="u_ex", order=3)
 def u(p):
@@ -114,13 +132,17 @@ for ref in range(3):
     print("number of elements:",view.size(0),"number of dofs:",len(space.mapper))
     
     rhs,matrix = assemble(space, u)
-    dofs = scipy.sparse.linalg.spsolve(matrix,rhs)
+    dofs = scipy.sparse.linalg.spsolve(matrix,rhs)    
+#    dofs = space.interpolation(u)                 #Uncomment when using interpolatioin
+    
+    
     @gridFunction(view, name="u_h", order=1)
     def uh(e,x):
         indices = space.mapper(e)
         phiVals = space.evaluateLocal(x)
         localDofs = dofs[indices]
         return np.dot(localDofs, phiVals)
+
     
     @gridFunction(view, name="err2", order=5) # Task 5
     def err2(e, xhat):                        
@@ -139,12 +161,20 @@ for ref in range(3):
 
         indices = space.mapper(e)
         U = dofs[indices]
-
+#        U = dofs[indices]         #Uncomment when doing interpolation instead
+        
         # compute grad u_h
         grad_uh = np.zeros(2)
         for k in range(3):
             grad_k = BinvT @ gradhat[k]
             grad_uh += U[k] * grad_k
+              
+        ''' 
+        grad_uh = np.zeros(2)            #Uncomment when doing interpolation instead
+        for k in range(3):
+            grad_k = BinvT @ gradhat[k]
+            grad_uh += U[k] * grad_k
+        '''    
 
         # exact gradient
         x0, x1 = x
