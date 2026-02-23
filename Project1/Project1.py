@@ -1,69 +1,133 @@
-from matplotlib import pyplot as plt
 import numpy as np
-import matplotlib.tri as mtri
+import numpy.linalg as la
+from numpy import sin
+#import math
 
-#Tasks 5-7
+from dune.grid import yaspGrid as hierarchicGrid
+from dune.grid import cartesianDomain
+from dune.alugrid import aluConformGrid
+#from dune.alugrid import aluSimplexGrid as leafGridView
+from dune.fem.utility import gridWidth
+from dune.fem.function import gridFunction
 
-from dune.grid import structuredGrid, cartesianDomain
-domain = cartesianDomain([-0.5, -0.5], [2, 1], [10, 20])
-rect_gridView = structuredGrid([-0.5, -0.5], [2, 1], [10, 20])
-rect_gridView.plot()
-
-from dune.alugrid import aluConformGrid as leafGridView
-tri_gridView = leafGridView(domain)
-tri_gridView.plot()
-
-
-
-#Tasks 8-9
 import pygmsh
 
-#Making triangular grid with hole
-with pygmsh.occ.Geometry() as geom:
-    geom.characteristic_length_min = 0.05
-    geom.characteristic_length_max = 0.05
-    
-    grid = geom.add_rectangle([-0.5, -0.5, 0], 2.5, 1.5)
-    hole = geom.add_disk([1, 0.5, 0.0], 0.1)
-    domain = geom.boolean_difference(grid, hole)
-    mesh = geom.generate_mesh()
 
-points, cells = mesh.points[:,:2], mesh.cells_dict
+def task_567(domain,plot):
+    rectView = hierarchicGrid(domain)
+    if plot:
+        rectView.plot()
+    triView = aluConformGrid(domain)
+    if plot:
+        triView.plot()
+    return triView
 
-dune_domain = {
-    "vertices": points.astype("float"),
-    "simplices": cells["triangle"]
-}
+def task_8(mesh_size, plot):
+    with pygmsh.occ.Geometry() as geom:
+        geom.characteristic_length_min = mesh_size
+        geom.characteristic_length_max = mesh_size
+        rect = geom.add_rectangle([-0.5, -0.5, 0], 2.5, 1.5)
+        circ = geom.add_disk([0.75, 0.25, 0], 0.25)
+        geom.boolean_difference(rect, circ)
+        mesh = geom.generate_mesh(verbose=False)
+    points, cells = mesh.points[:, :2], mesh.cells_dict
+    domain_hole = {"vertices":points.astype("float"), "simplices":cells["triangle"]}
+    holeView = aluConformGrid(domain_hole)
+    #holeView.hierarchicalGrid.globalRefine(2)
+    if plot:
+        holeView.plot()
+    return holeView, points
 
-gridView2D = leafGridView(dune_domain)
-gridView2D.plot()
+def task_910(holeView):
 
+    @gridFunction(holeView, name="h_e", order=0)
+    def elementWidth(element,xLocal):
+        cs = element.geometry.corners
+        #return max(la.norm(cs[0]-cs[1]),max(la.norm(cs[0]-cs[2]), la.norm(cs[1]-cs[2])))
+        return 0.5*abs(np.cross(cs[1]-cs[0],cs[2]-cs[0])) 
+    elementWidth.plot()
 
-grid_points = mesh.points[:, :2]
-grid_triangles = mesh.cells_dict["triangle"]
+    h_max = 0.0
+    for entity in holeView.entities(codim=0):
+        h_max = max(h_max, elementWidth(entity, [0,0])) 
 
+    # behöver parametern xLocal och argumentet [0,0] även om de inte används för något
 
-h_area = 0.0
-for t in grid_triangles:
-    p0, p1, p2 = grid_points[t]
-    area = 0.5 * abs(np.cross(p1 - p0, p2 - p0))  
-    h_area = max(h_area, area**(1/2))
+    h_ref = gridWidth( holeView )
+    print('h_max = ', h_max)
+    print('h_ref = ', h_ref)
 
-print(h_area)
-from dune.fem.utility import gridWidth
-h_dune = gridWidth(gridView2D)
-print(h_dune)
+def task_11(holeView, points):
 
+    mapper1 = holeView.mapper( lambda gt : 1 if gt.dim == 0 else 0) 
+    # 1:an innebär 1 dof per vertex
+    # dim = 0 för vertices
 
-#Task 10-11
+    ndofs = len(mapper1)
+    print('ndofs = ', ndofs)
+    nbr_vertices = len(points)
+    print('nbr_vertices = ', nbr_vertices)
 
+def task_1213(gridView):
 
+    # Task 12
 
+    def linearInterpolation(u):
+        gridView = u.gridView
+        mapper = gridView.mapper( lambda gt : 1 if gt.dim == 0 else 0) 
+        vec = np.full(mapper.size, None)
+        for e in gridView.elements:
+            for v in e.vertices:
+                i = mapper.index(v)
+                coord = v.geometry.center
+                if vec[i] is None:
+                    vec[i] = u(e, coord)
+        return vec, mapper
 
-#Task 12-14
+    @gridFunction (gridView, order =10 , name ="sin")
+    def u(element,localx):
+        x = element.geometry.toGlobal(localx)
+        return sin(20*x[0]*x[1])*x.two_norm
+    vec, mapper = linearInterpolation(u)
 
-def uh(e,xhat,u):
-    p0, p1, p2 = e[0], e[1], e[2]
-    x0hat, x1hat = xhat[0], xhat[1]
-    return u(p0)*(1-x0hat-x1hat) + u(p1)*x0hat + u(p2)*x1hat
+    @gridFunction(gridView, name="u_h", order=1) # order = 1 ???
+    def u_h(element, xLocal):
+        vertex_val = []
+        for vertex in element.vertices: # vertices loopas igenom i rätt ordning (dvs lokala index 0,1,2)
+            i = mapper.index(vertex)
+            vertex_val.append(vec[i])
+        interpol = vertex_val[0]*(1-xLocal[0]-xLocal[1]) + vertex_val[1]*xLocal[0] + vertex_val[2]*xLocal[1]
+        return interpol
 
+# Task 13
+
+    @gridFunction(gridView, name="error", order = 10)
+    def error(element, xLocal):
+        w = element.geometry.toLocal(element.geometry.center)
+        return abs(u(element,w) - u_h(element,w))
+
+    err = 0.0
+    for e in gridView.elements:
+        err = max(err,error(e, [0.0, 0.0]))
+    return err
+
+def task_14(triView):
+
+    print('coarse error ', task_1213(triView))
+    triView.hierarchicalGrid.globalRefine(1)
+    print('medium error ', task_1213(triView))
+    triView.hierarchicalGrid.globalRefine(1)
+    print('fine error ', task_1213(triView))
+
+if __name__ == "__main__":
+
+    domain = cartesianDomain([-0.5, -0.5], [2.0, 1.0], [10, 20])
+    mesh_size = 0.05
+
+    triView = task_567(domain,False)
+    holeView, points = task_8(mesh_size,False)
+    task_910(holeView)
+    task_11(holeView, points)
+    holeView.hierarchicalGrid.globalRefine(3)
+    task_1213(holeView)
+    task_14(holeView)
