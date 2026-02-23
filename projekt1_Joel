@@ -1,0 +1,151 @@
+import numpy as np
+import numpy.linalg as la
+from numpy import sin
+#import math
+
+from dune.grid import yaspGrid as hierarchicGrid
+from dune.grid import cartesianDomain
+from dune.alugrid import aluConformGrid
+#from dune.alugrid import aluSimplexGrid as leafGridView
+from dune.fem.utility import gridWidth
+from dune.fem.function import gridFunction
+
+import pygmsh
+
+
+def task_567(domain,plot):
+    rectView = hierarchicGrid(domain)
+    if plot:
+        rectView.plot()
+    triView = aluConformGrid(domain)
+    if plot:
+        triView.plot()
+    return triView
+
+def task_8(mesh_size, plot):
+    with pygmsh.occ.Geometry() as geom:
+        geom.characteristic_length_min = mesh_size
+        geom.characteristic_length_max = mesh_size
+        rect = geom.add_rectangle([-0.5, -0.5, 0], 2.5, 1.5)
+        circ = geom.add_disk([0.75, 0.25, 0], 0.25)
+        geom.boolean_difference(rect, circ)
+        mesh = geom.generate_mesh(verbose=False)
+    points, cells = mesh.points[:, :2], mesh.cells_dict
+    domain_hole = {"vertices":points.astype("float"), "simplices":cells["triangle"]}
+    holeView = aluConformGrid(domain_hole)
+    #holeView.hierarchicalGrid.globalRefine(2)
+    if plot:
+        holeView.plot()
+    return holeView, points
+
+def task_910(holeView):
+
+    @gridFunction(holeView, name="h_e", order=0)
+    def elementWidth(element,xLocal):
+        cs = element.geometry.corners
+        #return max(la.norm(cs[0]-cs[1]),max(la.norm(cs[0]-cs[2]), la.norm(cs[1]-cs[2])))
+        return 0.5*abs(np.cross(cs[1]-cs[0],cs[2]-cs[0])) 
+    elementWidth.plot()
+
+    h_max = 0.0
+    for entity in holeView.entities(codim=0):
+        h_max = max(h_max, elementWidth(entity, [0,0])) 
+
+    # behöver parametern xLocal och argumentet [0,0] även om de inte används för något
+
+    h_ref = gridWidth( holeView )
+    print('h_max = ', h_max)
+    print('h_ref = ', h_ref)
+
+def task_11(holeView, points):
+
+    mapper1 = holeView.mapper( lambda gt : 1 if gt.dim == 0 else 0) 
+    # 1:an innebär 1 dof per vertex
+    # dim = 0 för vertices
+
+    ndofs = len(mapper1)
+    print('ndofs = ', ndofs)
+    nbr_vertices = len(points)
+    print('nbr_vertices = ', nbr_vertices)
+
+def task_1213(gridView):
+
+    # Task 12
+
+    def linearInterpolation(u):
+        gridView = u.gridView
+        mapper = gridView.mapper( lambda gt : 1 if gt.dim == 0 else 0) 
+        vec = np.full(mapper.size, None)
+        for e in gridView.elements:
+            for v in e.vertices:
+                i = mapper.index(v)
+                coord = v.geometry.center
+                if vec[i] is None:
+                    vec[i] = u(e, coord)
+        return vec, mapper
+
+    @gridFunction (gridView, order =10 , name ="sin")
+    def u(element,localx):
+        x = element.geometry.toGlobal(localx)
+        return sin(20*x[0]*x[1])*x.two_norm
+    vec, mapper = linearInterpolation(u)
+
+    @gridFunction(gridView, name="u_h", order=1) # order = 1 ???
+    def u_h(element, xLocal):
+        vertex_val = []
+        for vertex in element.vertices: # vertices loopas igenom i rätt ordning (dvs lokala index 0,1,2)
+            i = mapper.index(vertex)
+            vertex_val.append(vec[i])
+        interpol = vertex_val[0]*(1-xLocal[0]-xLocal[1]) + vertex_val[1]*xLocal[0] + vertex_val[2]*xLocal[1]
+        return interpol
+
+# Task 13
+
+    @gridFunction(gridView, name="error", order = 10)
+    def error(element, xLocal):
+        w = element.geometry.toLocal(element.geometry.center)
+        return abs(u(element,w) - u_h(element,w))
+
+    err = 0.0
+    for e in gridView.elements:
+        err = max(err,error(e, [0.0, 0.0]))
+    return err
+
+def task_14(triView):
+
+    print('coarse error ', task_1213(triView))
+    triView.hierarchicalGrid.globalRefine(1)
+    print('medium error ', task_1213(triView))
+    triView.hierarchicalGrid.globalRefine(1)
+    print('fine error ', task_1213(triView))
+
+if __name__ == "__main__":
+
+    domain = cartesianDomain([-0.5, -0.5], [2.0, 1.0], [10, 20])
+    mesh_size = 0.05
+
+    triView = task_567(domain,False)
+    holeView, points = task_8(mesh_size,False)
+    task_910(holeView)
+    task_11(holeView, points)
+    holeView.hierarchicalGrid.globalRefine(3)
+    task_1213(holeView)
+    task_14(holeView)
+
+
+
+# ---------------------------------------------------------------------------------------
+# Kladd:
+
+# gammal lösning på uppg. 9
+'''
+h_max = 0.0
+# din lösning förmodligen enklare eftersom jag redan har points, cells
+for entity in holeView.entities(codim = 0):
+    cs = entity.geometry.corners
+    h_max = max(h_max, max(la.norm(cs[0]-cs[1]),max(la.norm(cs[0]-cs[2]), la.norm(cs[1]-cs[2]))))
+    # sqrt(volume) ???
+h_ref = gridWidth( holeView )
+print('h_max = ', h_max)
+print('h_ref = ', h_ref)
+'''
